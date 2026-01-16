@@ -82,7 +82,7 @@ int add_user(const char *username, const char *password) {
     }
     
     VPNUser *user = &users[user_count];
-    strncpy(user->username, username, MAX_USERNAME - 1);
+    strncpy(user->username, username, MAX_USERNAME);
     user->username[MAX_USERNAME - 1] = '\0';
     
     generate_salt(user->salt);
@@ -266,7 +266,14 @@ int main() {
     
     while (running) {
         display_menu();
-        choice = getch() - '0';
+        int ch = getch();
+        
+        // Validate input is a digit
+        if (ch < '1' || ch > '6') {
+            continue;
+        }
+        
+        choice = ch - '0';
         
         switch (choice) {
             case 1:

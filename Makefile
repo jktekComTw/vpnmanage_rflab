@@ -7,7 +7,7 @@ SRC = managevpnusers.c
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CC) -o $(TARGET) $(SRC) $(LIBS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LIBS)
 
 clean:
 	rm -f $(TARGET) vpnusers.db
