@@ -1,0 +1,22 @@
+# Build artifacts
+manage
+*.o
+*.a
+*.so
+
+# VPN user database
+vpnusers.db
+
+# Editor temporary files
+*~
+*.swp
+*.swo
+.*.swp
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
