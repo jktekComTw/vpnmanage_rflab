@@ -2,9 +2,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define MAX_ROWS 100
-#define NUM_COLS 6
+#define NUM_COLS 7
+#define FILE_NAME "/etc/ppp/chap-secrets"
+
+
 
 typedef struct {
     char client[64];
@@ -14,13 +18,15 @@ typedef struct {
     char ip[32];
     char date[32];
     char months[16];
+    char expired[16];
+    int is_expired;
 } Entry;
 
 Entry entries[MAX_ROWS];
 int num_entries = 0;
 
-int col_pos[] = {0, 12, 20, 56, 64, 76};
-int col_width[] = {12, 8, 36, 8, 12, 6};
+int col_pos[] = {0, 12, 20, 56, 64, 76, 84};
+int col_width[] = {12, 8, 36, 8, 12, 8, 10};
 
 void md5_hash(const char *str, char *output) {
     char cmd[256];
@@ -34,15 +40,62 @@ void md5_hash(const char *str, char *output) {
     }
 }
 
+void calculate_expired(Entry *entry) {
+    int month, day, year;
+    int months_to_add;
+    
+    if (sscanf(entry->date, "%d/%d/%d", &month, &day, &year) != 3) {
+        strcpy(entry->expired, "N/A");
+        entry->is_expired = 0;
+        return;
+    }
+    
+    if (entry->months[0] == '~') {
+        strcpy(entry->expired, "Never");
+        entry->is_expired = 0;
+        return;
+    }
+    
+    months_to_add = atoi(entry->months);
+    if (months_to_add <= 0) {
+        strcpy(entry->expired, "N/A");
+        entry->is_expired = 0;
+        return;
+    }
+    
+    struct tm expiry_tm = {0};
+    expiry_tm.tm_year = year - 1900;
+    expiry_tm.tm_mon = month - 1 + months_to_add;
+    expiry_tm.tm_mday = day;
+    
+    mktime(&expiry_tm);
+    
+    time_t now = time(NULL);
+    time_t expiry_time = mktime(&expiry_tm);
+    
+    // Show expiry date
+    snprintf(entry->expired, 16, "%02d/%02d/%04d",
+             expiry_tm.tm_mon + 1,
+             expiry_tm.tm_mday,
+             expiry_tm.tm_year + 1900);
+    
+    // Set expired flag
+    if (expiry_time < now) {
+        entry->is_expired = 1;
+    } else {
+        entry->is_expired = 0;
+    }
+}
+
 void save_file() {
-    FILE *fp = fopen("/etc/ppp/chap-secrets", "w");
+    FILE *fp = fopen(FILE_NAME, "w");
     if (fp == NULL) return;
     
     fprintf(fp, "# Secrets for authentication using CHAP\n");
     fprintf(fp, "# client\tserver\tsecret\t\t\t\tIP addresses\n");
     
     for (int i = 0; i < num_entries; i++) {
-        fprintf(fp, "%s\t%s\t%s\t%s\t#%s\t%s\n",
+        fprintf(fp, "%s\t%s\t\"%s\"\t%s\t#%s\t%s\n",
                 entries[i].client,
                 entries[i].server,
                 entries[i].secret,
@@ -172,6 +225,7 @@ void add_new_entry() {
     }
     
     md5_hash(new_entry.secret, new_entry.secret_md5);
+    calculate_expired(&new_entry);
     
     entries[num_entries] = new_entry;
     num_entries++;
@@ -190,7 +244,6 @@ void add_new_entry() {
 void delete_entry(int row) {
     if (num_entries == 0) return;
     
-    // Show row info being deleted
     attron(COLOR_PAIR(3) | A_BOLD);
     mvprintw(num_entries + 6, 0, "DELETE ROW: %s | %s | %s | %s",
              entries[row].client,
@@ -209,7 +262,6 @@ void delete_entry(int row) {
         return;
     }
     
-    // Delete row by shifting all entries up
     for (int i = row; i < num_entries - 1; i++) {
         entries[i] = entries[i + 1];
     }
@@ -228,6 +280,15 @@ void edit_field(int row, int col) {
     char *field;
     int max_len;
     int is_secret = 0;
+    
+    if (col == 6) {
+        attron(COLOR_PAIR(3));
+        mvprintw(num_entries + 6, 0, "Expired column is calculated automatically. Press any key...");
+        attroff(COLOR_PAIR(3));
+        refresh();
+        getch();
+        return;
+    }
     
     switch (col) {
         case 0: field = entries[row].client; max_len = 63; break;
@@ -293,6 +354,9 @@ void edit_field(int row, int col) {
             } else if (ch == 10 || ch == KEY_ENTER) {
                 if (strlen(buffer) > 0) {
                     strcpy(field, buffer);
+                    if (col == 4 || col == 5) {
+                        calculate_expired(&entries[row]);
+                    }
                     save_file();
                 }
                 break;
@@ -313,6 +377,15 @@ void edit_field(int row, int col) {
     curs_set(0);
 }
 
+void remove_quotes(char *str) {
+    int len = strlen(str);
+    
+    if (len >= 2 && str[0] == '"' && str[len-1] == '"') {
+        memmove(str, str + 1, len - 2);
+        str[len - 2] = '\0';
+    }
+}
+
 void draw_screen(int cur_row, int cur_col) {
     bkgd(COLOR_PAIR(1));
     clear();
@@ -324,36 +397,45 @@ void draw_screen(int cur_row, int cur_col) {
     mvprintw(0, col_pos[3], "IP");
     mvprintw(0, col_pos[4], "DATE");
     mvprintw(0, col_pos[5], "MONTHS");
+    mvprintw(0, col_pos[6], "EXPIRED");
     attroff(A_BOLD | COLOR_PAIR(2));
     
     attron(COLOR_PAIR(1));
-    mvhline(1, 0, '-', 90);
+    mvhline(1, 0, '-', 100);
     attroff(COLOR_PAIR(1));
     
     for (int i = 0; i < num_entries; i++) {
         int row = i + 2;
         char *fields[] = {
             entries[i].client, entries[i].server, entries[i].secret_md5,
-            entries[i].ip, entries[i].date, entries[i].months
+            entries[i].ip, entries[i].date, entries[i].months, entries[i].expired
         };
         for (int j = 0; j < NUM_COLS; j++) {
-            // Highlight entire row if selected
+            // Determine color
             if (i == cur_row) {
                 if (j == cur_col) {
-                    attron(COLOR_PAIR(5) | A_BOLD);  // Current cell: bold highlight
+                    attron(COLOR_PAIR(5) | A_BOLD);
                 } else {
-                    attron(COLOR_PAIR(6));  // Same row: light highlight
+                    attron(COLOR_PAIR(6));
                 }
+            } else if (entries[i].is_expired) {
+                // Entire row in red if expired
+                attron(COLOR_PAIR(3));
             } else {
                 attron(COLOR_PAIR(1));
             }
+            
             mvprintw(row, col_pos[j], "%-*s", col_width[j], fields[j]);
+            
+            // Turn off color
             if (i == cur_row) {
                 if (j == cur_col) {
                     attroff(COLOR_PAIR(5) | A_BOLD);
                 } else {
                     attroff(COLOR_PAIR(6));
                 }
+            } else if (entries[i].is_expired) {
+                attroff(COLOR_PAIR(3));
             } else {
                 attroff(COLOR_PAIR(1));
             }
@@ -372,7 +454,7 @@ int main() {
     char line[256];
     int line_num = 0, cur_row = 0, cur_col = 0, ch;
     
-    fp = fopen("/etc/ppp/chap-secrets", "r");
+    fp = fopen(FILE_NAME, "r");
     if (fp == NULL) { printf("Cannot open file\n"); return 1; }
     
     while (fgets(line, sizeof(line), fp) && num_entries < MAX_ROWS) {
@@ -400,9 +482,13 @@ int main() {
         int parsed = sscanf(line, "%s %s %s %s", entries[num_entries].client, entries[num_entries].server,
                entries[num_entries].secret, entries[num_entries].ip);
         
+        remove_quotes(entries[num_entries].secret);
+
+
         if (parsed < 4) continue;
         
         md5_hash(entries[num_entries].secret, entries[num_entries].secret_md5);
+        calculate_expired(&entries[num_entries]);
         num_entries++;
     }
     fclose(fp);
@@ -416,10 +502,10 @@ int main() {
     start_color();
     init_pair(1, COLOR_WHITE, COLOR_BLUE);     // Normal text
     init_pair(2, COLOR_YELLOW, COLOR_BLUE);    // Header/footer
-    init_pair(3, COLOR_RED, COLOR_BLUE);       // Error/delete warning
+    init_pair(3, COLOR_RED, COLOR_BLUE);       // Expired row (red text on blue bg)
     init_pair(4, COLOR_GREEN, COLOR_BLUE);     // Success
     init_pair(5, COLOR_BLACK, COLOR_WHITE);    // Selected cell
-    init_pair(6, COLOR_CYAN, COLOR_BLUE);      // Selected row (other cells)
+    init_pair(6, COLOR_CYAN, COLOR_BLUE);      // Selected row
     
     draw_screen(cur_row, cur_col);
     
@@ -459,7 +545,6 @@ int main() {
         }
         draw_screen(cur_row, cur_col);
     }
-    
     endwin();
     return 0;
 }
